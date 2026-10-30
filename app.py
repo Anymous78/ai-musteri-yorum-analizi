@@ -292,8 +292,10 @@ KESIN_OLUMLU_KOKLER = [
 ]
 
 NOTR_IFADELER = [
-    "normal", "fena değil", "idare eder", "orta", "ortalama", 
-    "ne iyi ne kötü", "standart", "standard", "şöyle böyle", "eh işte"
+    "normal", "fena değil", "idare eder", "orta", "ortalama",
+    "ne iyi ne kötü", "standart", "standard", "şöyle böyle", "eh işte",
+    "garip", "garipti", "tuhaf", "tuhaftı", "değişik", "değişikti",
+    "emin olamadım", "kararsızım", "farklı"
 ]
 
 KRIZ_KELIMELERI = [
