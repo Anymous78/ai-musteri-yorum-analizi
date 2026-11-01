@@ -416,7 +416,7 @@ def batch_analiz_et(metin_listesi, model, batch_boyutu=32):
     return sonuclar
 
 # ==============================================================================
-# EVRENSEL VE GELİŞMİŞ E-TİCARET YORUM ÇEKİCİ (WAF / BOT KORUMA DESTEKLİ)
+# TÜM E-TİCARET SİTELERİ İÇİN GÜNCEL VE EVRENSEL YORUM ÇEKİCİ MOTORU
 # ==============================================================================
 
 BROWSER_HEADERS = {
@@ -424,7 +424,6 @@ BROWSER_HEADERS = {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,"
         " like Gecko) Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept": "application/json, text/plain, */*",
     "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
@@ -433,29 +432,21 @@ def get_trendyol_yorumlar(url, session, limit=50):
   try:
     headers = {
         **BROWSER_HEADERS,
+        "Accept": "application/json, text/plain, */*",
         "Origin": "https://www.trendyol.com",
         "Referer": "https://www.trendyol.com/",
     }
-    # 1. ty.gl yönlendirmesini çöz
     res = session.get(url, headers=headers, allow_redirects=True, timeout=12)
     real_url = res.url
 
-    # 2. Hem -p- hem de URL içindeki 7-10 haneli saf rakamları yakala
-    content_id = None
-    match = re.search(r"-p-(\d+)", real_url)
-    if match:
-      content_id = match.group(1)
-    else:
-      alt_match = re.search(r"(\d{7,10})", real_url)
-      if alt_match:
-        content_id = alt_match.group(1)
-
-    if not content_id:
+    match = re.search(r"-p-(\d+)", real_url) or re.search(r"(\d{7,10})", real_url)
+    if not match:
       return []
+    content_id = match.group(1)
 
-    api_url = f"https://public-mdc.trendyol.com/discovery-web-socialgw-service/reviews/{content_id}?page=0&size={limit}"
+    # 1. Deneme: Güncel Gateway
+    api_url = f"https://www.trendyol.com/gw-social-review/reviews/{content_id}?page=0&size={limit}"
     api_res = session.get(api_url, headers=headers, timeout=12)
-
     if api_res.status_code == 200:
       data = api_res.json()
       items = (
@@ -463,10 +454,28 @@ def get_trendyol_yorumlar(url, session, limit=50):
           .get("productReviews", {})
           .get("content", [])
       )
+      reviews = [
+          i.get("comment").strip()
+          for i in items
+          if i.get("comment") and len(i.get("comment").strip()) > 5
+      ]
+      if reviews:
+        return reviews
+
+    # 2. Deneme: Alternatif API Gateway
+    alt_url = f"https://apigw.trendyol.com/discovery-web-socialgw-service/reviews/{content_id}?page=0&size={limit}"
+    alt_res = session.get(alt_url, headers=headers, timeout=12)
+    if alt_res.status_code == 200:
+      data = alt_res.json()
+      items = (
+          data.get("result", {})
+          .get("productReviews", {})
+          .get("content", [])
+      )
       return [
-          item.get("comment").strip()
-          for item in items
-          if item.get("comment") and len(item.get("comment").strip()) > 5
+          i.get("comment").strip()
+          for i in items
+          if i.get("comment") and len(i.get("comment").strip()) > 5
       ]
   except Exception:
     pass
@@ -477,14 +486,16 @@ def get_hepsiburada_yorumlar(url, session, limit=50):
   try:
     headers = {
         **BROWSER_HEADERS,
+        "Accept": "application/json, text/plain, */*",
         "Origin": "https://www.hepsiburada.com",
         "Referer": "https://www.hepsiburada.com/",
     }
     res = session.get(url, headers=headers, allow_redirects=True, timeout=12)
     real_url = res.url
 
-    # HBV0000 veya HBCV formatındaki ürün SKU'sunu yakala
-    match = re.search(r"-(hb[a-zA-Z0-9]+)", real_url, re.IGNORECASE)
+    match = re.search(r"-(hb[a-zA-Z0-9]+)", real_url, re.IGNORECASE) or re.search(
+        r"sku=([a-zA-Z0-9]+)", real_url, re.IGNORECASE
+    )
     if not match:
       return []
 
@@ -509,7 +520,9 @@ def get_amazon_yorumlar(url, session, limit=50):
   try:
     headers = {
         **BROWSER_HEADERS,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept": (
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        ),
         "Referer": "https://www.amazon.com.tr/",
     }
     res = session.get(url, headers=headers, allow_redirects=True, timeout=12)
@@ -535,6 +548,87 @@ def get_amazon_yorumlar(url, session, limit=50):
   except Exception:
     pass
   return []
+
+
+def get_n11_yorumlar(url, session, limit=50):
+  try:
+    headers = {
+        **BROWSER_HEADERS,
+        "Accept": "*/*",
+        "Origin": "https://www.n11.com",
+        "Referer": "https://www.n11.com/",
+    }
+    res = session.get(url, headers=headers, allow_redirects=True, timeout=12)
+    match = re.search(r"-p-(\d+)", res.url) or re.search(
+        r"productId=(\d+)", res.url
+    )
+    if not match:
+      return []
+
+    product_id = match.group(1)
+    ajax_url = f"https://www.n11.com/component/render/productReviews?productId={product_id}&page=1"
+    res_page = session.get(ajax_url, headers=headers, timeout=12)
+
+    soup = BeautifulSoup(res_page.text, "html.parser")
+    elements = soup.find_all("p", class_="comment-text") or soup.find_all(
+        "div", class_="comment-text"
+    )
+    return [
+        el.get_text().strip()
+        for el in elements
+        if len(el.get_text().strip()) > 5
+    ][:limit]
+  except Exception:
+    pass
+  return []
+
+
+def basit_web_yorumlari_cek(url):
+  try:
+    session = requests.Session()
+    clean_url = url.strip().lower()
+    yorumlar = []
+
+    # Platform Yönlendiricisi
+    if "trendyol.com" in clean_url or "ty.gl" in clean_url:
+      yorumlar = get_trendyol_yorumlar(url, session)
+    elif "hepsiburada.com" in clean_url:
+      yorumlar = get_hepsiburada_yorumlar(url, session)
+    elif "amazon." in clean_url:
+      yorumlar = get_amazon_yorumlar(url, session)
+    elif "n11.com" in clean_url:
+      yorumlar = get_n11_yorumlar(url, session)
+    else:
+      # Diğer tüm e-ticaret siteleri için genel HTML kazıyıcı
+      headers = {
+          **BROWSER_HEADERS,
+          "Accept": (
+              "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+          ),
+      }
+      yanit = session.get(url, headers=headers, timeout=12)
+      if yanit.status_code == 200:
+        metin_parcalari = re.findall(
+            r"<(?:\p|span)[^>]*>(.*?)</(?:\p|span)>",
+            yanit.text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        for m in metin_parcalari:
+          temiz = re.sub(r"<[^>]+>", "", m).strip()
+          if 20 < len(temiz) < 400 and temiz not in yorumlar:
+            yorumlar.append(temiz)
+
+    if not yorumlar:
+      return (
+          None,
+          "Sayfadan otomatik yorum alınamadı. 'Ham Metin Yapıştır' seçeneğini"
+          " kullanabilirsiniz.",
+      )
+
+    return pd.DataFrame({"Yorumlar": yorumlar[:60]}), None
+
+  except Exception as e:
+    return None, f"Hata: {str(e)}"
 
 
 def get_n11_yorumlar(url, session, limit=50):
