@@ -415,26 +415,104 @@ def batch_analiz_et(metin_listesi, model, batch_boyutu=32):
     ilerleme_cubugu.empty()
     return sonuclar
 
+def get_trendyol_yorumlar(url, session, headers, limit=50):
+    try:
+        res = session.get(url, headers=headers, allow_redirects=True, timeout=10)
+        real_url = res.url
+        match = re.search(r"-p-(\d+)", real_url) or re.search(r"/(\d+)\?", real_url)
+        if not match:
+            return []
+        content_id = match.group(1)
+        api_url = f"https://public-mdc.trendyol.com/discovery-web-socialgw-service/reviews/{content_id}?page=0&size={limit}"
+        api_res = session.get(api_url, headers=headers, timeout=10)
+        if api_res.status_code == 200:
+            data = api_res.json()
+            items = data.get("result", {}).get("productReviews", {}).get("content", [])
+            return [item.get("comment").strip() for item in items if item.get("comment") and len(item.get("comment").strip()) > 5]
+    except Exception:
+        pass
+    return []
+
+def get_hepsiburada_yorumlar(url, session, headers, limit=50):
+    try:
+        res = session.get(url, headers=headers, allow_redirects=True, timeout=10)
+        match = re.search(r"-(hb[a-zA-Z0-9]+)", res.url, re.IGNORECASE)
+        if not match:
+            return []
+        sku = match.group(1).upper()
+        api_url = f"https://user-content-gw-hermes.hepsiburada.com/query/api/v1/user-contents?sku={sku}&from=0&size={limit}"
+        api_res = session.get(api_url, headers=headers, timeout=10)
+        if api_res.status_code == 200:
+            data = api_res.json()
+            return [item.get("review", {}).get("content", "").strip() for item in data.get("data", []) if len(item.get("review", {}).get("content", "").strip()) > 5]
+    except Exception:
+        pass
+    return []
+
+def get_amazon_yorumlar(url, session, headers, limit=50):
+    try:
+        res = session.get(url, headers=headers, allow_redirects=True, timeout=10)
+        match = re.search(r"/(?:dp|product-reviews)/([A-Z0-9]{10})", res.url)
+        if not match:
+            return []
+        asin = match.group(1)
+        reviews_url = f"https://www.amazon.com.tr/product-reviews/{asin}?pageNumber=1"
+        res_page = session.get(reviews_url, headers=headers, timeout=10)
+        soup = BeautifulSoup(res_page.text, "html.parser")
+        elements = soup.find_all("span", {"data-hook": "review-body"}) or soup.find_all("div", class_="review-text-content")
+        return [el.get_text().strip() for el in elements if len(el.get_text().strip()) > 5][:limit]
+    except Exception:
+        pass
+    return []
+
+def get_n11_yorumlar(url, session, headers, limit=50):
+    try:
+        res = session.get(url, headers=headers, allow_redirects=True, timeout=10)
+        match = re.search(r"-p-(\d+)", res.url)
+        if not match:
+            return []
+        product_id = match.group(1)
+        ajax_url = f"https://www.n11.com/component/render/productReviews?productId={product_id}&page=1"
+        res_page = session.get(ajax_url, headers=headers, timeout=10)
+        soup = BeautifulSoup(res_page.text, "html.parser")
+        elements = soup.find_all("p", class_="comment-text") or soup.find_all("div", class_="comment-text")
+        return [el.get_text().strip() for el in elements if len(el.get_text().strip()) > 5][:limit]
+    except Exception:
+        pass
+    return []
+
 def basit_web_yorumlari_cek(url):
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
         }
-        yanit = requests.get(url, headers=headers, timeout=10)
-        if yanit.status_code != 200:
-            return None, f"Sayfa yüklenemedi. HTTP Durum Kodu: {yanit.status_code}"
+        session = requests.Session()
+        clean_url = url.strip().lower()
+        yorumlar = []
 
-        metin_parcalari = re.findall(r'<(?:p|span)[^>]*>(.*?)</(?:p|span)>', yanit.text, re.IGNORECASE | re.DOTALL)
-        temiz_yorumlar = []
-        for m in metin_parcalari:
-            temiz = re.sub(r'<[^>]+>', '', m).strip()
-            if 20 < len(temiz) < 400 and temiz not in temiz_yorumlar:
-                temiz_yorumlar.append(temiz)
+        if "trendyol.com" in clean_url or "ty.gl" in clean_url:
+            yorumlar = get_trendyol_yorumlar(url, session, headers)
+        elif "hepsiburada.com" in clean_url:
+            yorumlar = get_hepsiburada_yorumlar(url, session, headers)
+        elif "amazon." in clean_url:
+            yorumlar = get_amazon_yorumlar(url, session, headers)
+        elif "n11.com" in clean_url:
+            yorumlar = get_n11_yorumlar(url, session, headers)
+        else:
+            yanit = session.get(url, headers=headers, timeout=10)
+            if yanit.status_code == 200:
+                metin_parcalari = re.findall(r'<(?:\p|span)[^>]*>(.*?)</(?:\p|span)>', yanit.text, re.IGNORECASE | re.DOTALL)
+                for m in metin_parcalari:
+                    temiz = re.sub(r'<[^>]+>', '', m).strip()
+                    if 20 < len(temiz) < 400 and temiz not in yorumlar:
+                        yorumlar.append(temiz)
 
-        if not temiz_yorumlar:
+        if not yorumlar:
             return None, "Sayfadan otomatik yorum alınamadı. 'Ham Metin Yapıştır' seçeneğini kullanabilirsiniz."
 
-        return pd.DataFrame({"Yorumlar": temiz_yorumlar[:60]}), None
+        return pd.DataFrame({"Yorumlar": yorumlar[:60]}), None
+
     except Exception as e:
         return None, f"Hata: {str(e)}"
 
